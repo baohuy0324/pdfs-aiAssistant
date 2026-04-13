@@ -10,7 +10,7 @@ import torch
 
 @lru_cache(maxsize=1)
 def get_embeddings():
-    """Tạo Embeddings: Sử dụng HuggingFaceEmbeddings (Local) để không tải lại nhiều lần"""
+    #Tạo Embeddings: Sử dụng HuggingFaceEmbeddings để không tải lại nhiều lần
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2",
@@ -18,9 +18,7 @@ def get_embeddings():
     )
 
 def process_pdfs_to_vectorstore(pdf_files):
-    """
-    Chunking văn bản và tạo Vector database sử dụng FAISS.
-    """
+    #Chunking văn bản và tạo Vector database sử dụng FAISS.
     documents = []
     
     for pdf in pdf_files:

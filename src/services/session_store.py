@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import pickle
 from typing import Any
 
 import redis.asyncio as redis_async
