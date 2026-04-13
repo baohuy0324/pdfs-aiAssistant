@@ -65,8 +65,8 @@ streamlit run app.py
 |----------|-------------------------------|---------|-------|
 | `GET`    | `/health`                     | None    | Kiểm tra sự sống của hệ thống và Redis. |
 | `POST`   | `/v1/ingest`                  | `multipart/form-data` | Upload file PDF, trả về `session_id`. |
-| `POST`   | `/v1/chat`                    | `application/json` | Gửi câu hỏi dựa trên `session_id` đã có. |
-| `DELETE` | `/v1/sessions/{session_id}`   | Path    | Giải phóng bộ nhớ, xoá session ngay lập tức. |
+| `POST`   | `/v1/chat/stream`             | `application/json` | Gửi câu hỏi dựa trên `session_id` đã có. Trả về stream SSE. |
+| `DELETE` | `/v1/sessions/{session_id}`   | Path    | Giải phóng bộ nhớ, xoá session ngay lập tức khỏi Redis và RAM cache. |
 
 ---
 
@@ -78,20 +78,19 @@ streamlit run app.py
 - **Số hóa nội dung (Embedding)**: Chuyển đổi văn bản thành không gian vector bằng mô hình local `all-MiniLM-L6-v2`. Việc sử dụng model local giúp bảo mật dữ liệu và giảm chi phí vận hành.
 - **Lưu trữ đa tầng**:
     - **Vĩnh cửu (Redis)**: Index FAISS được nén và lưu trữ vào Redis kèm theo `session_id` để chia sẻ giữa các instance.
-    - **Truy cập nhanh (LRU Cache)**: Các VectorStore thường dùng được giải mã và lưu tại bộ nhớ RAM (tối đa 50 sessions) giúp giảm tải CPU và tăng tốc độ phản hồi.
+    - **Truy cập nhanh (LRU Cache)**: Các VectorStore thường dùng được giải mã đa luồng (thread-safe) và lưu tại bộ nhớ RAM (tối đa 50 sessions) giúp giảm tải CPU và tăng tốc độ phản hồi.
 
 ### 2. Quy trình Truy vấn & Phản hồi (Query Pipeline)
 - **Lớp bảo mật (Security Layer)**: Mọi câu hỏi đều đi qua bộ lọc `is_safe_query` để phát hiện và ngăn chặn các hành vi Prompt Injection.
 - **Định danh & Tracing**: Mỗi yêu cầu được gán một `X-Request-ID` duy nhất giúp theo dõi vết (tracing).
 - **Truy xuất ngữ cảnh (Retrieval)**:
-    - Hệ thống tìm kiếm 6 đoạn văn bản tương quan nhất từ cơ sở dữ liệu FAISS.
+    - Hệ thống chạy ngầm tại background Thread Pool, tìm kiếm 6 đoạn văn bản tương quan nhất từ cơ sở dữ liệu FAISS.
     - **Max Marginal Relevance (MMR)**: Thuật toán được tinh chỉnh để cân bằng giữa độ chính xác và tính đa dạng của thông tin, giảm thiểu sự trùng lặp và tối ưu hóa phạm vi kiến thức cho LLM.
-- **Điều phối thông minh (LLM Routing)**: 
-    - **Gemini 2.5 Flash**: Lựa chọn khi ngữ cảnh ngắn (< 4000 ký tự) để tối ưu độ chính xác và khả năng hiểu tiếng Việt.
-    - **Groq (Llama 3.1)**: Tự động chuyển đổi khi dữ liệu lớn để đảm bảo tốc độ suy luận cực nhanh.
+- **Điều phối thông minh (LLM Routing) & Fallback**: 
+    - **Gemini 2.5 Flash**: Lựa chọn ưu tiên khi ngữ cảnh ngắn (< 10000 ký tự) để tối ưu độ chính xác và khả năng hiểu tiếng Việt.
+    - **Groq (Llama 3.1)**: Tự động chuyển đổi khi dữ liệu lớn (>= 10000 ký tự) để đảm bảo tốc độ suy luận cực nhanh, và đóng vai trò fallback tự động nếu Gemini gặp lỗi kết nối.
 - **Chế độ phản hồi linh hoạt**:
-    - **Standard Response**: Trả về kết quả hoàn chỉnh ngay khi LLM kết thúc quá trình suy luận.
-    - **SSE Streaming**: Hỗ trợ Server-Sent Events thông qua endpoint `/v1/chat/stream`, trả từng từ (token) real-time.
+    - **SSE Streaming**: Hỗ trợ Server-Sent Events thông qua endpoint `/v1/chat/stream`, trả từng từ  real-time .
 
 ## Triển khai Docker 
 
