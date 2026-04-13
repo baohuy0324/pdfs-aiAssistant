@@ -1,7 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -18,6 +21,7 @@ SESSION_TTL_SECONDS = int(_ttl_env) if str(_ttl_env).strip().isdigit() else 6048
 
 def check_keys():
     if not GROQ_API_KEY:
-        print("Warning: Missing GROQ_API_KEY in .env file.")
+        logger.warning("Missing GROQ_API_KEY in .env file.")
     if not GEMINI_API_KEY:
-        print("Warning: Missing GEMINI_API_KEY in .env file.")
+        logger.warning("Missing GEMINI_API_KEY in .env file.")
+
