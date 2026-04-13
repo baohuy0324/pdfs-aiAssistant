@@ -85,13 +85,19 @@ if user_query:
 
     with st.chat_message("assistant"):
         # process 
-        if pdf_docs and _has_new_files(pdf_docs):
-            success = _auto_process(pdf_docs)
-            if not success:
-                msg = "Không thể đọc được nội dung từ file PDF. Vui lòng thử file khác."
-                st.markdown(msg)
-                st.session_state.messages.append({"role": "assistant", "content": msg})
-                st.stop()
+        if pdf_docs:
+            if _has_new_files(pdf_docs):
+                success = _auto_process(pdf_docs)
+                if not success:
+                    msg = "Không thể đọc được nội dung từ file PDF. Vui lòng thử file khác."
+                    st.markdown(msg)
+                    st.session_state.messages.append({"role": "assistant", "content": msg})
+                    st.stop()
+        else:
+            if st.session_state.vectorstore is not None:
+                st.session_state.vectorstore = None
+                st.session_state.processed_files_hash = None
+                st.session_state.processed_file_names = []
 
         if st.session_state.vectorstore is None:
             msg = "Vui lòng upload file PDF rồi gửi câu hỏi."

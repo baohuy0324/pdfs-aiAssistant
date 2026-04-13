@@ -36,21 +36,27 @@ def ask_groq(context: str, query: str, chat_history: str = "") -> Generator[str,
 def ask_llm(context: str, query: str, chat_history: str = "") -> Generator[str, None, None]:
     """
     Router phân xử logic LLM dựa trên độ dài của ngữ cảnh.
-    Context ngắn (< 4000 ký tự) -> Sử dụng Gemini.
-    Context dài (>= 4000 ký tự) -> Sử dụng Groq để tính toán cực nhanh.
+    Context ngắn (< 10000 ký tự) thì sử dụng Gemini.
+    Context dài (>= 10000 ký tự) thì sử dụng Groq để tính toán.
     """
     if not context or not context.strip():
         yield "Tôi không tìm thấy thông tin trong tài liệu."
         return
 
-    if len(context) < 4000:
+    if len(context) < 10000:
         logger.info("LLM Router: Context ngắn (%d chars), dùng Gemini", len(context))
+        has_yielded = False
         try:
-            yield from ask_gemini(context, query, chat_history)
+            for chunk in ask_gemini(context, query, chat_history):
+                has_yielded = True
+                yield chunk
         except Exception as e:
-            logger.warning("Gemini lỗi (%s), fallback sang Groq", e)
-            yield from ask_groq(context, query, chat_history)
+            if has_yielded:
+                logger.warning("Gemini bị ngắt kết nối giữa chừng (%s). Không thể fallback.", e)
+                yield "\n\n*(Đã xảy ra lỗi kết nối mạng với mô hình, xin vui lòng gửi lại câu hỏi)*"
+            else:
+                logger.warning("Gemini lỗi (%s), fallback sang Groq", e)
+                yield from ask_groq(context, query, chat_history)
     else:
         logger.info("LLM Router: Context dài (%d chars), dùng Groq", len(context))
         yield from ask_groq(context, query, chat_history)
-
