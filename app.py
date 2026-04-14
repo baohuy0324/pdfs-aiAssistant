@@ -1,14 +1,9 @@
 import os
-os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 import hashlib
+import json
+import requests
 import streamlit as st
-from src.services.rag import process_pdfs_to_vectorstore, get_context
-from src.services.llm import ask_enterprise_llm, ask_general_inquiry, ask_out_of_scope
-from src.services.intent_classifier import classify_intent
-from src.core.security import is_safe_query
-from src.core.config import check_keys
+import time
 
 # Page Config 
 st.set_page_config(
@@ -16,7 +11,9 @@ st.set_page_config(
     layout="centered",
 )
 
-# Custom CSS — Enterprise Look 
+API_URL = "http://localhost:8000"
+
+# Custom CSS 
 st.markdown("""
 <style>
 /* Header branding */
@@ -68,14 +65,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-check_keys()
-
 # Session State
 for key, default in [
-    ("vectorstore", None),
+    ("api_session_id", None),
     ("messages", []),
     ("processed_files_hash", None),
     ("processed_file_names", []),
+    ("last_intent", ""), 
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -91,29 +87,40 @@ def _compute_files_hash(files) -> str | None:
         h.update(str(f.size).encode())
     return h.hexdigest()
 
-
 def _has_new_files(uploaded_files) -> bool:
     current_hash = _compute_files_hash(uploaded_files)
     if current_hash is None:
         return False
     return current_hash != st.session_state.processed_files_hash
 
-
 def _auto_process(uploaded_files) -> bool:
-    """Tự động process PDF và cập nhật vectorstore."""
+    """Gọi API POST /v1/ingest"""
     try:
+        files_data = []
         for f in uploaded_files:
             f.seek(0)
-        vectorstore = process_pdfs_to_vectorstore(uploaded_files)
-        if vectorstore:
-            st.session_state.vectorstore = vectorstore
+            files_data.append(("files", (f.name, f.read(), "application/pdf")))
+            
+        response = requests.post(f"{API_URL}/v1/ingest", files=files_data)
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.api_session_id = data.get("session_id")
             st.session_state.processed_files_hash = _compute_files_hash(uploaded_files)
             st.session_state.processed_file_names = [f.name for f in uploaded_files]
             return True
+        else:
+            try:
+                error_detail = response.json().get("detail", response.text)
+                st.error(f"API Error ({response.status_code}): {error_detail}")
+            except Exception:
+                st.error(f"API Error ({response.status_code}): {response.text}")
+            return False
+    except requests.exceptions.ConnectionError:
+        st.error(f"Không thể kết nối đến API tại {API_URL}. Vui lòng kiểm tra xem FastAPI đã chạy chưa.")
         return False
-    except Exception:
+    except Exception as e:
+        st.error(f"Lỗi: {e}")
         return False
-
 
 def _intent_badge(intent: str) -> str:
     """Trả về HTML badge tương ứng với intent."""
@@ -125,13 +132,12 @@ def _intent_badge(intent: str) -> str:
     return mapping.get(intent, ('',))[0]
 
 
-#Header 
+# Header
 st.markdown("""
 <div class="enterprise-header">
     <div style="font-size:2.2rem"></div>
     <div>
         <h1>Enterprise AI Assistant</h1>
-        <p>Chatbox doanh nghiệp</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -140,17 +146,19 @@ st.markdown("""
 with st.sidebar:
     st.markdown("### 📎 Tài liệu của bạn")
     pdf_docs = st.file_uploader(
-        "Tải lên file PDF để AI phân tích",
+        label="Tải lên file PDF",
         accept_multiple_files=True,
         type="pdf",
     )
     
-    # Hiển thị tên file đã upload
+    # Hiển thị tên file đã upload qua API
     if st.session_state.processed_file_names:
         st.divider()
         st.markdown("**Tài liệu đang dùng:**")
         for n in st.session_state.processed_file_names:
-            st.caption(f"📄 {n}")
+            st.caption(f" {n}")
+        if st.session_state.api_session_id:
+            st.caption(f"`session_id: {st.session_state.api_session_id[:8]}...`")
 
 #  Chat History 
 for message in st.session_state.messages:
@@ -160,7 +168,7 @@ for message in st.session_state.messages:
             st.markdown(_intent_badge(message["intent"]), unsafe_allow_html=True)
 
 #  Chat Input
-user_query = st.chat_input("Nhập câu hỏi của bạn...")
+user_query = st.chat_input("Nhập câu hỏi của bạn")
 
 if user_query:
     st.session_state.messages.append({"role": "user", "content": user_query})
@@ -168,75 +176,75 @@ if user_query:
         st.markdown(user_query)
 
     with st.chat_message("assistant"):
-        #  Security check 
-        is_safe, error_msg = is_safe_query(user_query)
-        if not is_safe:
-            st.markdown(error_msg)
-            st.session_state.messages.append({"role": "assistant", "content": error_msg, "intent": "out_of_scope"})
-            st.stop()
-
-        # Intent Classification 
-        with st.spinner("Đang phân tích yêu cầu..."):
-            intent = classify_intent(user_query)
-
         #  Process PDF nếu có file mới upload 
         if pdf_docs:
             if _has_new_files(pdf_docs):
-                with st.spinner("Đang xử lý tài liệu PDF..."):
+                with st.spinner():
                     success = _auto_process(pdf_docs)
                     if not success:
-                        msg = " Không thể đọc được nội dung từ file PDF. Vui lòng thử file khác."
+                        msg = " Không thể gửi tài liệu lên API. Vui lòng thử lại."
                         st.markdown(msg)
                         st.session_state.messages.append({"role": "assistant", "content": msg, "intent": "enterprise"})
                         st.stop()
         else:
-            # Nếu không còn file → xoá vectorstore
-            if st.session_state.vectorstore is not None:
-                st.session_state.vectorstore = None
+            # Nếu không còn file → xoá api_session_id
+            if st.session_state.api_session_id is not None:
+                st.session_state.api_session_id = None
                 st.session_state.processed_files_hash = None
                 st.session_state.processed_file_names = []
 
-        #  Branch theo intent 
-        try:
-            # Lấy trước chat_history dùng chung
-            chat_history = ""
-            for m in st.session_state.messages[-5:-1]:
-                role = "Người dùng" if m["role"] == "user" else "Trợ lý AI"
-                chat_history += f"{role}: {m['content']}\n"
+        with st.spinner():
+            try:
+                # Prepare payload for API
+                history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-6:-1]]
+                payload = {
+                    "session_id": st.session_state.api_session_id,
+                    "message": user_query,
+                    "history": history
+                }
 
-            if intent == "general_inquiry":
-                # Không cần PDF — trả lời phiếm
-                response_stream = ask_general_inquiry(user_query, chat_history)
-
-            elif intent == "out_of_scope":
-                # Từ chối lịch sự
-                response_stream = ask_out_of_scope(user_query)
-
-            else:
-                # enterprise — cần vectorstore
-                if st.session_state.vectorstore is None:
-                    msg = (
-                        "Để trả lời câu hỏi về doanh nghiệp, vui lòng upload file PDF "
-                        "(nội quy, chính sách, hợp đồng...) và gửi lại câu hỏi."
-                    )
-                    st.markdown(msg)
-                    st.session_state.messages.append({"role": "assistant", "content": msg, "intent": "enterprise"})
-                    st.stop()
-
-                context = get_context(st.session_state.vectorstore, user_query)
-                response_stream = ask_enterprise_llm(context, user_query, chat_history)
-
-        except Exception as e:
-            st.markdown(f" Lỗi hệ thống: {str(e)}")
-            st.stop()
-
-        #  Stream response 
-        full_response = st.write_stream(response_stream)
-        st.markdown(_intent_badge(intent), unsafe_allow_html=True)
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": full_response,
-            "intent": intent,
-        })
-
-
+                # Streaming definition
+                def stream_api_response():
+                    st.session_state.last_intent = ""
+                    with requests.post(f"{API_URL}/v1/chat/stream", json=payload, stream=True) as response:
+                        if response.status_code != 200:
+                            try:
+                                yield f"Lỗi API: {response.status_code} - {response.json().get('detail', response.text)}"
+                            except:
+                                yield f"Lỗi API: {response.status_code} - {response.text}"
+                            return
+                        
+                        for line in response.iter_lines():
+                            if line:
+                                decoded_line = line.decode('utf-8')
+                                if decoded_line.startswith("data: "):
+                                    data_str = decoded_line[6:]
+                                    if data_str == "[DONE]":
+                                        break
+                                    try:
+                                        data = json.loads(data_str)
+                                        # Cập nhật intent để hiển thị badge sau
+                                        if "intent" in data:
+                                            st.session_state.last_intent = data["intent"]
+                                        if "content" in data:
+                                            yield data["content"]
+                                    except json.JSONDecodeError:
+                                        pass
+                                        
+                response_stream = stream_api_response()
+                full_response = st.write_stream(response_stream)
+                
+                intent = st.session_state.last_intent
+                if intent:
+                    st.markdown(_intent_badge(intent), unsafe_allow_html=True)
+                
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": full_response,
+                    "intent": intent,
+                })
+                
+            except requests.exceptions.ConnectionError:
+                st.error(f"Không thể kết nối đến API tại {API_URL}. Vui lòng khởi động API bằng cổng 8000:\\n`uvicorn src.main:app --host 0.0.0.0 --port 8000`")
+            except Exception as e:
+                st.markdown(f" Lỗi hệ thống: {str(e)}")
