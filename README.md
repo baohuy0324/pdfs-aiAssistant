@@ -54,7 +54,6 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
 **Bước 3: Chạy giao diện kiểm thử Streamlit (Tùy chọn)**
 
-*(Lưu ý: Bạn phải đảm bảo API ở Bước 2 đang chạy, vì Streamlit hiện đóng vai trò là Frontend gọi qua REST API).*
 ```bash
 streamlit run app.py
 ```
