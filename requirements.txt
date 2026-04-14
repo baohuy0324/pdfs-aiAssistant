@@ -13,4 +13,5 @@ redis>=5
 langchain-huggingface
 sentence-transformers
 torch
+torchvision
 cachetools
